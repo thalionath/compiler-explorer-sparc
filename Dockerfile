@@ -3,7 +3,6 @@ MAINTAINER Mario Gruber <mario.gruber@space.unibe.ch>
 
 WORKDIR /tmp
 
-# required to run Gaisler toolchain
 RUN apt-get update \
  && apt-get install -y \
     nodejs \
