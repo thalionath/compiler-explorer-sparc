@@ -5,8 +5,10 @@ WORKDIR /tmp
 
 RUN apt-get update \
  && apt-get install -y \
-    nodejs \
-    npm \
+    bzip2 \
+    xz-utils \
+    curl \
+    build-essential \
     git-core \
     autoconf \
     gperf \
@@ -17,6 +19,8 @@ RUN apt-get update \
     gawk \
     libncurses5-dev \
     wget \
+ && curl -sL https://deb.nodesource.com/setup_8.x | bash - \
+ && apt-get install -y nodejs \
  && rm -rf /var/lib/apt/lists/
 
 WORKDIR /opt
@@ -42,6 +46,7 @@ WORKDIR /tmp
 # install crosstool-ng to build compilers
 RUN git clone https://github.com/crosstool-ng/crosstool-ng.git \
  && cd crosstool-ng \
+ && git checkout 01e329051e9ccd3f94241a2f73700ad03da0c59b \
  && ./bootstrap \
  && ./configure \
  && make \
@@ -57,7 +62,7 @@ RUN useradd -r ctng \
  && mkdir -p /opt/toolchains \
  && chown ctng:ctng /opt/toolchains
 
-WORKDIR /tmp/ct-ng/7.1.0
+WORKDIR /tmp/ct-ng/7.2.0
 
 # ct-ng cannot run as root
 RUN su ctng -p -c "ct-ng build" \
