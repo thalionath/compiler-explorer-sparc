@@ -62,6 +62,12 @@ RUN useradd -r ctng \
  && mkdir -p /opt/toolchains \
  && chown ctng:ctng /opt/toolchains
 
+# sparc-leon-linux-gnu
+WORKDIR /tmp/ct-ng/4.9.4
+
+# ct-ng cannot run as root
+RUN su ctng -p -c "ct-ng build"
+
 WORKDIR /tmp/ct-ng/7.3.0
 
 # ct-ng cannot run as root

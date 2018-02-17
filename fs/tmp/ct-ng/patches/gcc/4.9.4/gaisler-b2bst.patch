@@ -1,0 +1,227 @@
+diff --git a/gcc/config/sparc/sparc-c.c b/gcc/config/sparc/sparc-c.c
+index bb4e51f..814ea22 100644
+--- a/gcc/config/sparc/sparc-c.c
++++ b/gcc/config/sparc/sparc-c.c
+@@ -59,4 +59,7 @@ sparc_target_macros (void)
+       cpp_define (parse_in, "__VIS__=0x100");
+       cpp_define (parse_in, "__VIS=0x100");
+     }
++
++  if (sparc_fix_b2bst)
++    builtin_define_std ("__FIX_B2BST");
+ }
+diff --git a/gcc/config/sparc/sparc.c b/gcc/config/sparc/sparc.c
+index 4d80c17..b54690c 100644
+--- a/gcc/config/sparc/sparc.c
++++ b/gcc/config/sparc/sparc.c
+@@ -874,10 +874,16 @@ mem_ref (rtx x)
+ static bool
+ sparc_gate_work_around_errata (void)
+ {
+-  /* The only errata we handle are those of the AT697F and UT699.  */
+-  return sparc_fix_at697f != 0 || sparc_fix_ut699 != 0;
++	/* The only errata we handle are those of the AT697F, UT699 and certain LEON3FT. */
++	return sparc_fix_at697f || sparc_fix_ut699 || sparc_fix_b2bst;
+ }
+ 
++/* True if INSN is a md pattern or asm statement.  */
++#define USEFUL_INSN_P(INSN)						\
++  (NONDEBUG_INSN_P (INSN)						\
++   && GET_CODE (PATTERN (INSN)) != USE					\
++   && GET_CODE (PATTERN (INSN)) != CLOBBER)
++
+ static unsigned int
+ sparc_do_work_around_errata (void)
+ {
+@@ -896,6 +902,95 @@ sparc_do_work_around_errata (void)
+       if (NONJUMP_INSN_P (insn) && GET_CODE (PATTERN (insn)) == SEQUENCE)
+ 	insn = XVECEXP (PATTERN (insn), 0, 1);
+ 
++      /* Look for a double-word store.  */
++      if (sparc_fix_b2bst
++	  && NONJUMP_INSN_P (insn)
++	  && (set = single_set (insn)) != NULL_RTX
++	  && GET_MODE_SIZE (GET_MODE (SET_DEST (set))) == 8
++	  && MEM_P (SET_DEST (set)))
++	{
++	  next = next_active_insn (insn);
++	  if (!next)
++	    break;
++
++	  /* Skip empty assembly statements.  */
++	  if (USEFUL_INSN_P (next)
++	      && (asm_noperands (PATTERN (next))>=0)
++	      && !strcmp (decode_asm_operands (PATTERN (next),
++					       NULL, NULL, NULL,
++					       NULL, NULL), ""))
++	    next = next_active_insn (next);
++	  if (!next)
++	    break;
++
++	  /* If the insn is a branch, then it cannot be problematic.  */
++	  if (!NONJUMP_INSN_P (next) || GET_CODE (PATTERN (next)) == SEQUENCE)
++	    continue;
++
++	  if ((set = single_set (next)) == NULL_RTX)
++	    continue;
++
++	  /* Add NOP if double-word store is followed by any type of store.  */
++	  if (MEM_P (SET_DEST (set)))
++	    insert_nop = true;
++	}
++      else
++      /* Look for single-word, half-word, or byte store.  */
++      if (sparc_fix_b2bst
++	  && NONJUMP_INSN_P (insn)
++	  && (set = single_set (insn)) != NULL_RTX
++	  && GET_MODE_SIZE (GET_MODE (SET_DEST (set))) <= 4
++	  && MEM_P (SET_DEST (set)))
++	{
++	  rtx after;
++
++	  next = next_active_insn (insn);
++	  if (!next)
++	    break;
++
++	  /* Skip empty assembly statements.  */
++	  if (USEFUL_INSN_P (next)
++	      && (asm_noperands (PATTERN (next))>=0)
++	      && !strcmp (decode_asm_operands (PATTERN (next),
++					       NULL, NULL, NULL,
++					       NULL, NULL), ""))
++	    next = next_active_insn (next);
++	  if (!next)
++	    break;
++
++	  /* If the insn is a branch, then it cannot be problematic.  */
++	  if (!NONJUMP_INSN_P (next) || GET_CODE (PATTERN (next)) == SEQUENCE)
++	    continue;
++
++	  /* If the insn is a load or store, then it cannot be problematic.  */
++	  if ((set = single_set (next)) != NULL_RTX
++	      && (MEM_P (SET_DEST (set)) || MEM_P (SET_SRC (set))))
++	    continue;
++
++	  after = next_active_insn (next);
++	  if (!after)
++	    continue;
++
++	  /* Skip empty assembly statements.  */
++	  if (USEFUL_INSN_P (after)
++	      && (asm_noperands (PATTERN (after))>=0)
++	      && !strcmp (decode_asm_operands (PATTERN (after),
++					       NULL, NULL, NULL,
++					       NULL, NULL), ""))
++	    after = next_active_insn (after);
++	  if (!after)
++	    break;
++
++	  /* If the insn is a branch, then it cannot be problematic.  */
++	  if (!NONJUMP_INSN_P (after) || GET_CODE (PATTERN (after)) == SEQUENCE)
++	    continue;
++
++	  /* Add NOP if third instruction is a store.  */
++	  if (((set = single_set (after)) != NULL_RTX)
++	      && MEM_P (SET_DEST (set)))
++	    insert_nop = true;
++	}
++      else
+       /* Look for a single-word load into an odd-numbered FP register.  */
+       if (sparc_fix_at697f
+ 	  && NONJUMP_INSN_P (insn)
+@@ -1483,6 +1578,10 @@ sparc_option_override (void)
+   if (TARGET_ARCH32)
+     target_flags &= ~MASK_STACK_BIAS;
+ 
++  /* -mfix-ut699 implies -mfix-b2bst.  */
++  if (sparc_fix_ut699)
++    sparc_fix_b2bst = 1;
++
+   /* Supply a default value for align_functions.  */
+   if (align_functions == 0
+       && (sparc_cpu == PROCESSOR_ULTRASPARC
+diff --git a/gcc/config/sparc/sparc.md b/gcc/config/sparc/sparc.md
+index 731cd97..75fc03f 100644
+--- a/gcc/config/sparc/sparc.md
++++ b/gcc/config/sparc/sparc.md
+@@ -319,6 +319,10 @@
+    (symbol_ref "(sparc_fix_ut699 != 0
+ 		 ? FIX_UT699_TRUE : FIX_UT699_FALSE)"))
+ 
++(define_attr "fix_b2bst" "false,true"
++   (symbol_ref "(sparc_fix_b2bst != 0
++		 ? FIX_B2BST_TRUE : FIX_B2BST_FALSE)"))
++
+ ;; Length (in # of insns).
+ ;; Beware that setting a length greater or equal to 3 for conditional branches
+ ;; has a side-effect (see output_cbranch and output_v9branch).
+@@ -465,6 +469,8 @@
+ (define_attr "in_branch_delay" "false,true"
+   (cond [(eq_attr "type" "uncond_branch,branch,cbcond,uncond_cbcond,call,sibcall,call_no_delay_slot,multi")
+ 	   (const_string "false")
++	 (and (eq_attr "fix_b2bst" "true") (eq_attr "type" "store,fpstore"))
++	   (const_string "false")
+ 	 (and (eq_attr "fix_ut699" "true") (eq_attr "type" "load,sload"))
+ 	   (const_string "false")
+ 	 (and (eq_attr "fix_ut699" "true")
+@@ -5528,7 +5534,7 @@
+ 	(div:DF (match_operand:DF 1 "register_operand" "e")
+ 		(match_operand:DF 2 "register_operand" "e")))]
+   "TARGET_FPU && sparc_fix_ut699"
+-  "fdivd\t%1, %2, %0\n\tstd\t%0, [%%sp-8]"
++  "fdivd\t%1, %2, %0\n\tnop\n\tstd\t%0, [%%sp-8]\n\tnop"
+   [(set_attr "type" "fpdivd")
+    (set_attr "fptype" "double")
+    (set_attr "length" "2")])
+@@ -5780,7 +5786,7 @@
+   [(set (match_operand:DF 0 "register_operand" "=e")
+ 	(sqrt:DF (match_operand:DF 1 "register_operand" "e")))]
+   "TARGET_FPU && sparc_fix_ut699"
+-  "fsqrtd\t%1, %0\n\tstd\t%0, [%%sp-8]"
++  "fsqrtd\t%1, %0\n\tnop\n\tstd\t%0, [%%sp-8]\n\tnop"
+   [(set_attr "type" "fpsqrtd")
+    (set_attr "fptype" "double")
+    (set_attr "length" "2")])
+diff --git a/gcc/config/sparc/sparc.opt b/gcc/config/sparc/sparc.opt
+index a6e9435..8820031 100644
+--- a/gcc/config/sparc/sparc.opt
++++ b/gcc/config/sparc/sparc.opt
+@@ -215,6 +215,10 @@ mfix-ut699
+ Target Report RejectNegative Var(sparc_fix_ut699)
+ Enable workarounds for the errata of the UT699 processor
+ 
++mfix-b2bst
++Target Report RejectNegative Var(sparc_fix_b2bst)
++Enable workarounds for LEON3FT store-store errata
++
+ Mask(LONG_DOUBLE_128)
+ ;; Use 128-bit long double
+ 
+diff --git a/gcc/doc/invoke.texi b/gcc/doc/invoke.texi
+index effebf7..ef53640 100644
+--- a/gcc/doc/invoke.texi
++++ b/gcc/doc/invoke.texi
+@@ -999,7 +999,7 @@ See RS/6000 and PowerPC Options.
+ -mvis2  -mno-vis2  -mvis3  -mno-vis3 @gol
+ -mcbcond -mno-cbcond @gol
+ -mfmaf  -mno-fmaf  -mpopc  -mno-popc @gol
+--mfix-at697f -mfix-ut699}
++-mfix-at697f -mfix-ut699 -mfix-b2bst}
+ 
+ @emph{SPU Options}
+ @gccoptlist{-mwarn-reloc -merror-reloc @gol
+@@ -21290,6 +21290,11 @@ processor (which corresponds to erratum #13 of the AT697E processor).
+ @opindex mfix-ut699
+ Enable the documented workarounds for the floating-point errata and the data
+ cache nullify errata of the UT699 processor.
++
++@item -mfix-b2bst
++@opindex mfix-b2bst
++Enable the documented workaround for the back-to-back store errata of
++certain LEON3FT processors.
+ @end table
+ 
+ These @samp{-m} options are supported in addition to the above
+-- 
+2.10.0.windows.1
+
