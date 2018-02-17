@@ -46,7 +46,7 @@ WORKDIR /tmp
 # install crosstool-ng to build compilers
 RUN git clone https://github.com/crosstool-ng/crosstool-ng.git \
  && cd crosstool-ng \
- && git checkout 01e329051e9ccd3f94241a2f73700ad03da0c59b \
+ && git checkout aca85cbb3d9cf0247674464a55246029d5820114 \
  && ./bootstrap \
  && ./configure \
  && make \
@@ -62,7 +62,7 @@ RUN useradd -r ctng \
  && mkdir -p /opt/toolchains \
  && chown ctng:ctng /opt/toolchains
 
-WORKDIR /tmp/ct-ng/7.2.0
+WORKDIR /tmp/ct-ng/7.3.0
 
 # ct-ng cannot run as root
 RUN su ctng -p -c "ct-ng build" \
